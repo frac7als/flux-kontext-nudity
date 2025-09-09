@@ -84,7 +84,7 @@ def prepare_models():
         except Exception as e:
             print(f"[prepare_models] Skip remove {path}: {e}")
 
-# ---------- Runtime: pull Drive assets & route to folders ----------
+# ---------- Runtime: pull Drive assets with fallback & route ----------
 def download_gdrive_assets():
     import gdown
 
@@ -100,9 +100,9 @@ def download_gdrive_assets():
 
     file_ids = [
         "1-3zuAumzikFF__3pvBUD_2nNb_wpyYBy",   # JD3sNDFFK.safetensors (LoRA)
-        "1xrb9IqFx8vv1qGs_Ac0gIhFk7t_3-AyD",   # new
-        "1iTP9J37AXoJMl87Z7LttgE67wI9VV5oe",   # new
-        "10zGbW5o-ExwP8HVM-gQC8avH9ZICIOS-",   # new
+        "1xrb9IqFx8vv1qGs_Ac0gIhFk7t_3-AyD",   # e.g., clip_l / t5xxl / ae / other
+        "1iTP9J37AXoJMl87Z7LttgE67wI9VV5oe",
+        "10zGbW5o-ExwP8HVM-gQC8avH9ZICIOS-",   # provided with trailing '-'
     ]
 
     def route_dir(filename: str) -> str:
@@ -115,20 +115,45 @@ def download_gdrive_assets():
             return vae_dir
         return lora_dir
 
-    for fid in file_ids:
+    def try_download(fid: str) -> str | None:
+        """
+        Try multiple methods to get a file for a given Drive ID.
+        Returns absolute output path or None.
+        """
+        cwd = os.getcwd()
+        os.chdir(staging)
+        out_path = None
         try:
-            print(f"[gdrive] Downloading file_id={fid}")
-            cwd = os.getcwd()
-            os.chdir(staging)
-            out_path = gdown.download(id=fid, quiet=False)  # saves with original filename
+            # 1) ID-based
+            out_path = gdown.download(id=fid, quiet=False)
+            if out_path:
+                return os.path.abspath(out_path)
+
+            # 2) URL fallbacks
+            url_variants = [
+                f"https://drive.google.com/uc?id={fid}&confirm=t",
+                f"https://drive.google.com/open?id={fid}",
+                f"https://drive.google.com/file/d/{fid}/view?usp=sharing",
+            ]
+            for url in url_variants:
+                out_path = gdown.download(url=url, quiet=False, fuzzy=True)
+                if out_path:
+                    return os.path.abspath(out_path)
+            return None
+        finally:
             os.chdir(cwd)
 
+    for fid in file_ids:
+        fid = fid.strip()
+        try:
+            print(f"[gdrive] Downloading file_id={fid}")
+            out_path = try_download(fid)
             if not out_path:
-                print(f"[gdrive] Failed: file_id={fid} (no path returned)")
+                print(f"[gdrive] Failed: file_id={fid} (all methods)")
                 continue
 
             fname = os.path.basename(out_path)
-            src = os.path.join(staging, fname)
+            src = out_path
             if not os.path.exists(src) or os.path.getsize(src) == 0:
                 print(f"[gdrive] Empty/missing: {src}")
                 continue
