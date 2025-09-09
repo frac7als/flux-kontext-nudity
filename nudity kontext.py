@@ -137,4 +137,51 @@ def download_gdrive_assets():
             print(f"[gdrive] Downloading file_id={fid}")
             cwd = os.getcwd()
             os.chdir(staging)
-            out = gdown.download(id=fid, quiet=False
+            out = gdown.download(id=fid, quiet=False)  # saves with original filename
+            os.chdir(cwd)
+
+            if not out:
+                print(f"[gdrive] Failed to download file_id={fid} (no output path).")
+                continue
+
+            fname = os.path.basename(out)
+            src = os.path.join(staging, fname)
+            if not os.path.exists(src) or os.path.getsize(src) == 0:
+                print(f"[gdrive] Downloaded file missing/empty: {src}")
+                continue
+
+            dest_dir = _route(fname)
+            dest = os.path.join(dest_dir, fname)
+            if os.path.exists(dest):
+                try:
+                    os.remove(dest)
+                except Exception:
+                    pass
+            shutil.move(src, dest)
+            print(f"[gdrive] Saved -> {dest} ({os.path.getsize(dest)} bytes)")
+
+        except Exception as e:
+            print(f"[gdrive] Error downloading {fid}: {e}")
+
+# Cache HF artifacts between builds
+vol = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
+
+image = (
+    image.pip_install("huggingface_hub[hf_transfer]>=0.34.0,<1.0")
+    .run_function(prepare_models, volumes={"/cache": vol})
+)
+
+app = modal.App(name="example-comfyui", image=image)
+
+@app.function(
+    max_containers=1,
+    gpu="L40S",
+    volumes={"/cache": vol},
+)
+@modal.concurrent(max_inputs=10)
+@modal.web_server(8000, startup_timeout=60)
+def ui():
+    # Pull all Google Drive assets and route them
+    download_gdrive_assets()
+
+    subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
